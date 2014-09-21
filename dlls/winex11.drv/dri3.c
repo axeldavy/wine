@@ -27,12 +27,16 @@ WINE_DEFAULT_DEBUG_CHANNEL(x11drv);
 #if defined(SONAME_LIBXEXT) && defined(SONAME_LIBXFIXES)
 
 #include "x11drv.h"
+#include "wine/d3dadapter.h"
+
+#include <stdlib.h>
+#include <fcntl.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/Xfixes.h>
 #include <X11/Xlib-xcb.h>
-#include <xcb/xcb.h>
-#include <xcb/dri3.h>
-#include <xcb/present.h>
+
+#include "xfixes.h"
+#include "dri3.h"
 
 
 BOOL
@@ -108,7 +112,7 @@ DRI3Open(Display *dpy, int screen, int *device_fd)
     int fd;
     Window root = RootWindow(dpy, screen);
 
-    cookie = xcb_dri3_open(xcb_connection, root, NULL);
+    cookie = xcb_dri3_open(xcb_connection, root, 0);
 
     reply = xcb_dri3_open_reply(xcb_connection, cookie, NULL);
     if (!reply)
@@ -141,7 +145,7 @@ DRI3PixmapFromDmaBuf(Display *dpy, int screen, int fd, int width, int height, in
                                                 width * stride * bpp, // size calculation may be wrong (perhaps /8 missing), but seems unused by the server.
                                                 width, height, stride * bpp / 8, // note: pitch calculation may be wrong
                                                 depth, bpp, fd);
-    error = xcb_request_check(present_priv->xcb_connection, cookie); /* performs a flush */
+    error = xcb_request_check(xcb_connection, cookie); /* performs a flush */
     if (error) {
         ERR("Error using DRI3 to convert a DmaBufFd to pixmap\n");
         return FALSE;
@@ -217,10 +221,10 @@ static void PRESENThandle_events(PRESENTpriv *present_priv, xcb_present_generic_
             present_pixmap_priv->present_complete_pending = FALSE;
             switch (ce->mode) {
                 case XCB_PRESENT_COMPLETE_MODE_FLIP:
-                    present_pixmap_priv->last_present_was_flipping = TRUE;
+                    present_pixmap_priv->last_present_was_flip = TRUE;
                     break;
                 case XCB_PRESENT_COMPLETE_MODE_COPY:
-                    present_pixmap_priv->last_present_was_flipping = FALSE;
+                    present_pixmap_priv->last_present_was_flip = FALSE;
                     break;
             }
             if (present_pixmap_priv->released)
@@ -277,23 +281,26 @@ PRESENTInit(Display *dpy, PRESENTpriv **present_priv)
     if (!*present_priv) {
         return FALSE;
     }
-    present_priv->xcb_connection = XGetXCBConnection(dpy);
+    (*present_priv)->xcb_connection = XGetXCBConnection(dpy);
     return TRUE;
 }
 
 static void PRESENTForceReleases(PRESENTpriv *present_priv)
 {
+    PRESENTPixmapPriv *current = NULL;
+
     if (!present_priv->window)
         return;
-
+    
     while (present_priv->pixmap_present_pending) {
         PRESENTwait_events(present_priv); /* TODO quit wine if returns false */
     }
     PRESENTflush_events(present_priv); /* may be remaining idle event */
-    current = first_present_priv;
+    
+    current = present_priv;
     while (current) {
         if (!current->released) {
-            if (!current->last_present_was_flipping) {
+            if (!current->last_present_was_flip) {
                 ERR("ERROR: a pixmap seems not released by PRESENT for no reason. Code bug.\n");
             } else {
                 /* Present the same pixmap with a non-valid part to force the copy mode and the releases */
@@ -361,16 +368,16 @@ static BOOL PRESENTPrivChangeWindow(PRESENTpriv *present_priv, XID window)
 }
 
 void
-PRESENTDestroy(PRESENTpriv *present_priv)
+PRESENTDestroy(Display *dpy, PRESENTpriv *present_priv)
 {
     PRESENTPixmapPriv *current = NULL;
 
     PRESENTForceReleases(present_priv);
 
-    current = first_present_priv;
+    current = present_priv;
     while (current) {
         PRESENTPixmapPriv *next = current->next;
-        XFreePixmap(current->pixmap);
+        XFreePixmap(dpy, current->pixmap);
         free(current);
         current = next;
     }
@@ -399,7 +406,7 @@ BOOL
 PRESENTTryFreePixmap(PRESENTPixmapPriv *present_pixmap_priv)
 {
     PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
-    PRESENTpriv *current;
+    PRESENTPixmapPriv *current;
 
     if (!present_pixmap_priv->released)
         return FALSE;
@@ -421,6 +428,7 @@ free_priv:
 BOOL
 PRESENTHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv)
 {
+    PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
     xcb_void_cookie_t cookie;
     xcb_generic_error_t *error;
     Window *root_return;
@@ -430,13 +438,14 @@ PRESENTHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv)
     unsigned int *depth_return;
     uint32_t v;
     xcb_gcontext_t gc;
+
     if (!present_priv->window)
         return FALSE;
     XGetGeometry(dpy, present_pixmap_priv->pixmap, root_return, x_return, y_return, width_return,
                  height_return, border_width_return, depth_return);
     v = 0;
     xcb_create_gc(present_priv->xcb_connection,
-                  (gc = xcb_generate_id(c)),
+                  (gc = xcb_generate_id(present_priv->xcb_connection)),
                   present_priv->window,
                   XCB_GC_GRAPHICS_EXPOSURES,
                   &v);
@@ -453,7 +462,7 @@ PRESENTHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv)
 BOOL
 PRESENTPixmap(Display *dpy, XID window,
               PRESENTPixmapPriv *present_pixmap_priv, D3DPRESENT_PARAMETERS *pPresentationParameters,
-              RECT *pSourceRect, RECT *pDestRect, RGNDATA *pDirtyRegion)
+              const RECT *pSourceRect, const RECT *pDestRect, RGNDATA *pDirtyRegion)
 {
     PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
     xcb_void_cookie_t cookie;
@@ -489,14 +498,14 @@ PRESENTPixmap(Display *dpy, XID window,
             break;
         case D3DPRESENT_INTERVAL_IMMEDIATE:
         default:
-            presentationInterval = 0
+            presentationInterval = 0;
             break;
     }
-    target_msc += presentationInterval * (present_priv->present_complete_pending + 1);
+    target_msc += presentationInterval * (present_pixmap_priv->present_complete_pending + 1);
     serial = present_priv->last_serial + 1;
 
     /* Note: PRESENT defines some way to do partial copy:
-    /* presentproto:
+     * presentproto:
      * 'x-off' and 'y-off' define the location in the window where
      *  the 0,0 location of the pixmap will be presented. valid-area
      *  and update-area are relative to the pixmap.
@@ -529,14 +538,14 @@ PRESENTPixmap(Display *dpy, XID window,
             y_off = -pSourceRect->top;
             rect_update.x = pSourceRect->left;
             rect_update.y = pSourceRect->top;
-            rect_update.width = pSourceRect.rect->right - pSourceRect->left;
-            rect_update.height = pSourceRect.rect->bottom - pSourceRect->top;
+            rect_update.width = pSourceRect->right - pSourceRect->left;
+            rect_update.height = pSourceRect->bottom - pSourceRect->top;
         }
         if (pDestRect) {
             x_off += pDestRect->left;
             y_off += pDestRect->top;
-            rect_update.width = pDestRect.rect->right - pDestRect->left;
-            rect_update.height = pDestRect.rect->bottom - pDestRect->top;
+            rect_update.width = pDestRect->right - pDestRect->left;
+            rect_update.height = pDestRect->bottom - pDestRect->top;
             /* Note: the size of pDestRect and pSourceRect are supposed to be the same size
              * because the driver would have done things to assure that. */
         }
@@ -601,7 +610,7 @@ PRESENTWaitOnePixmapReleased(PRESENTpriv *present_priv)
                 return TRUE;
             current = current->next;
         }
-    } while (PRESENTwait_events(present_priv))
+    } while (PRESENTwait_events(present_priv));
     /* TODO: here quits wine ?*/
     return FALSE;
 }

@@ -38,7 +38,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3dadapter);
 
 #include <d3dadapter/drm.h>
 
-#include <X11/Xlib.h>
 #include "xfixes.h"
 #include "dri3.h"
 
@@ -88,6 +87,12 @@ struct DRI3Present
 
     WCHAR devname[32];
     HCURSOR hCursor;
+};
+
+struct D3DWindowBuffer
+{
+    Pixmap pixmap;
+    PRESENTPixmapPriv *present_pixmap_priv;
 };
 
 static void
@@ -231,11 +236,6 @@ DRI3Present_GetPresentParameters( struct DRI3Present *This,
     return D3D_OK;
 }
 
-struct D3DWindowBuffer {
-    Pixmap pixmap;
-    PRESENTPixmapPriv *present_pixmap_priv;
-}
-
 static HRESULT WINAPI
 DRI3Present_NewBuffer( struct DRI3Present *This,
                        int dmaBufFd,
@@ -244,13 +244,13 @@ DRI3Present_NewBuffer( struct DRI3Present *This,
                        int stride,
                        int depth,
                        int bpp,
-                       D3DWindowBuffer **out)
+                       struct D3DWindowBuffer **out)
 {
     Pixmap pixmap;
 
     if (!DRI3PixmapFromDmaBuf(gdi_display, DefaultScreen(gdi_display),
                               dmaBufFd, width, height, stride, depth,
-                              bpp, &pixmap )
+                              bpp, &pixmap ))
         return D3DERR_DRIVERINTERNALERROR;
 
     *out = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
@@ -262,18 +262,19 @@ DRI3Present_NewBuffer( struct DRI3Present *This,
 
 static HRESULT WINAPI
 DRI3Present_DestroyBuffer( struct DRI3Present *This,
-                           D3DWindowBuffer *buffer )
+                           struct D3DWindowBuffer *buffer )
 {
     /* the pixmap is managed by the PRESENT backend.
      * But if it can delete it right away, we may have
      * better performance */
     PRESENTTryFreePixmap(buffer->present_pixmap_priv);
     HeapFree(GetProcessHeap(), 0, buffer);
+    return D3D_OK;
 }
 
 static HRESULT WINAPI
 DRI3Present_IsBufferReleased( struct DRI3Present *This,
-                              D3DWindowBuffer *buffer,
+                              struct D3DWindowBuffer *buffer,
                               BOOL *bReleased )
 {
     *bReleased = PRESENTIsPixmapReleased(buffer->present_pixmap_priv);
@@ -281,7 +282,7 @@ DRI3Present_IsBufferReleased( struct DRI3Present *This,
 }
 
 static HRESULT WINAPI
-DRI3Present_WaitOneBufferReleased)( struct DRI3Present *This )
+DRI3Present_WaitOneBufferReleased( struct DRI3Present *This )
 {
     if (PRESENTWaitOnePixmapReleased(This->present_priv))
         return D3D_OK;
@@ -291,7 +292,7 @@ DRI3Present_WaitOneBufferReleased)( struct DRI3Present *This )
 
 static HRESULT WINAPI
 DRI3Present_FrontBufferCopy( struct DRI3Present *This,
-                             D3DWindowBuffer *buffer )
+                             struct D3DWindowBuffer *buffer )
 {
     if (PRESENTHelperCopyFront(gdi_display, buffer->present_pixmap_priv))
         return D3D_OK;
@@ -301,7 +302,7 @@ DRI3Present_FrontBufferCopy( struct DRI3Present *This,
 
 static HRESULT WINAPI
 DRI3Present_PresentBuffer( struct DRI3Present *This,
-                           D3DWindowBuffer *buffer,
+                           struct D3DWindowBuffer *buffer,
                            HWND hWndOverride,
                            const RECT *pSourceRect,
                            const RECT *pDestRect,
@@ -319,7 +320,7 @@ DRI3Present_PresentBuffer( struct DRI3Present *This,
     if (!d3d) { return D3DERR_DRIVERINTERNALERROR; }
 
     if (!PRESENTPixmap(gdi_display, d3d->drawable, buffer->present_pixmap_priv,
-                       This->params, pSourceRect, pDestRect, pDirtyRegion))
+                       &This->params, pSourceRect, pDestRect, pDirtyRegion))
         return D3DERR_DRIVERINTERNALERROR;
 
     release_d3d_drawable(d3d);
@@ -461,7 +462,7 @@ DRI3Present_GetWindowSize( struct DRI3Present *This,
                            int *width, int *height )
 {
     HRESULT hr;
-    Rect pRect;
+    RECT pRect;
 
     if (!hWnd)
         hWnd = This->focus_wnd;
@@ -496,12 +497,15 @@ static LONG fullscreen_exstyle(LONG exstyle)
 
 static ID3DPresentVtbl DRI3Present_vtable = {
     (void *)DRI3Present_QueryInterface,
+    (void *)DRI3Present_NewBuffer,
+    (void *)DRI3Present_DestroyBuffer,
+    (void *)DRI3Present_IsBufferReleased,
+    (void *)DRI3Present_WaitOneBufferReleased,
+    (void *)DRI3Present_FrontBufferCopy,
+    (void *)DRI3Present_PresentBuffer,
     (void *)DRI3Present_AddRef,
     (void *)DRI3Present_Release,
     (void *)DRI3Present_GetPresentParameters,
-    (void *)DRI3Present_GetBuffer,
-    (void *)DRI3Present_GetFrontBuffer,
-    (void *)DRI3Present_Present,
     (void *)DRI3Present_GetRasterStatus,
     (void *)DRI3Present_GetDisplayMode,
     (void *)DRI3Present_GetPresentStats,
@@ -596,7 +600,7 @@ DRI3Present_new( Display *dpy,
     This->params = *params;
     strcpyW(This->devname, devname);
 
-    PRESENTInit(&(This->present_priv));
+    PRESENTInit(dpy, &(This->present_priv));
 
     *out = This;
 

@@ -27,8 +27,8 @@
 
 #if defined(SONAME_LIBXEXT) && defined(SONAME_LIBXFIXES)
 
-#include <X11/Xlib.h>
 #include <X11/extensions/Xfixes.h>
+#include <X11/Xlib.h>
 #include <X11/Xlib-xcb.h>
 #include <xcb/xcb.h>
 #include <xcb/dri3.h>
@@ -53,7 +53,7 @@ typedef struct PRESENTPriv PRESENTpriv;
 typedef struct PRESENTPixmapPriv PRESENTPixmapPriv;
 
 BOOL
-PRESENTInit(PRESENTpriv **present_priv);
+PRESENTInit(Display *dpy, PRESENTpriv **present_priv);
 
 /* will clean properly and free all PRESENTPixmapPriv associated to PRESENTpriv.
  * PRESENTPixmapPriv should not be freed by something else.
@@ -75,7 +75,7 @@ PRESENTHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv);
 BOOL
 PRESENTPixmap(Display *dpy, XID window,
               PRESENTPixmapPriv *present_pixmap_priv, D3DPRESENT_PARAMETERS *pPresentationParameters,
-              RECT *pSourceRect, RECT *pDestRect, RGNDATA *pDirtyRegion);
+              const RECT *pSourceRect, const RECT *pDestRect, RGNDATA *pDirtyRegion);
 
 BOOL
 PRESENTIsPixmapReleased(PRESENTPixmapPriv *present_pixmap_priv);
