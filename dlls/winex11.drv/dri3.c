@@ -291,7 +291,7 @@ static void PRESENTForceReleases(PRESENTpriv *present_priv)
 
     if (!present_priv->window)
         return;
-    
+
     while (present_priv->pixmap_present_pending) {
         PRESENTwait_events(present_priv); /* TODO quit wine if returns false */
     }
@@ -374,7 +374,7 @@ PRESENTDestroy(Display *dpy, PRESENTpriv *present_priv)
 
     PRESENTForceReleases(present_priv);
 
-    current = present_priv;
+    current = present_priv->first_present_priv;
     while (current) {
         PRESENTPixmapPriv *next = current->next;
         XFreePixmap(dpy, current->pixmap);
@@ -501,7 +501,7 @@ PRESENTPixmap(Display *dpy, XID window,
             presentationInterval = 0;
             break;
     }
-    target_msc += presentationInterval * (present_pixmap_priv->present_complete_pending + 1);
+    target_msc += presentationInterval * (present_priv->pixmap_present_pending + 1);
     serial = present_priv->last_serial + 1;
 
     /* Note: PRESENT defines some way to do partial copy:
