@@ -68,9 +68,6 @@ struct d3d_drawable
     Drawable drawable; /* X11 drawable */
     HDC hdc;
     HWND wnd; /* HWND (for convenience) */
-    RECT dc_rect; /* rect relative to the X11 drawable */
-    RECT dest_rect; /* dest rect used when creating the X11 region */
-    XserverRegion region; /* X11 region matching dc_rect */
 };
 
 struct DRI2Present
@@ -96,9 +93,7 @@ struct DRI2Present
 static void
 free_d3dadapter_drawable(struct d3d_drawable *d3d)
 {
-    DRI2DestroyDrawable(gdi_display, d3d->drawable);
     ReleaseDC(d3d->wnd, d3d->hdc);
-    if (d3d->region) { pXFixesDestroyRegion(gdi_display, d3d->region); }
     HeapFree(GetProcessHeap(), 0, d3d);
 }
 
@@ -140,17 +135,6 @@ create_d3dadapter_drawable(HWND hwnd)
 
     d3d->drawable = extesc.drawable;
     d3d->wnd = hwnd;
-    d3d->dc_rect = extesc.dc_rect;
-    SetRect(&d3d->dest_rect, 0, 0, 0, 0);
-    d3d->region = 0; /* because of pDestRect, this is set later */
-
-    /*if (!DRI2CreateDrawable(gdi_display, d3d->drawable)) {
-        ERR("DRI2CreateDrawable failed (hwnd=%p, drawable=%u).\n",
-            hwnd, d3d->drawable);
-        HeapFree(GetProcessHeap(), 0, d3d);
-        return NULL;
-    }*/
-    DRI2CreateDrawable(gdi_display, d3d->drawable);
 
     return d3d;
 }
@@ -170,15 +154,6 @@ get_d3d_drawable(HWND hwnd)
                       sizeof(extesc), (LPSTR)&extesc) <= 0) {
             WARN("Window update check failed (hwnd=%p, hdc=%p)\n",
                  hwnd, d3d->hdc);
-        }
-
-        /* update the data and destroy the cached (now invalid) region */
-        if (!EqualRect(&d3d->dc_rect, &extesc.dc_rect)) {
-            d3d->dc_rect = extesc.dc_rect;
-            if (d3d->region) {
-                pXFixesDestroyRegion(gdi_display, d3d->region);
-                d3d->region = 0;
-            }
         }
 
         return d3d;
