@@ -10,7 +10,7 @@ C_SRCS = \
 	clipboard.c \
 	d3dadapter.c \
 	desktop.c \
-	dri2.c \
+	dri3.c \
 	event.c \
 	graphics.c \
 	ime.c \

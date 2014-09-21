@@ -40,19 +40,15 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3dadapter);
 
 #include <X11/Xlib.h>
 #include "xfixes.h"
-#include "dri2.h"
+#include "dri3.h"
 
 #include <libdrm/drm.h>
 #include <sys/ioctl.h>
 #include <errno.h>
 #include <fcntl.h>
 
-struct d3dadapter_info {
-    unsigned dri2_major, dri2_minor;
-};
 
 static const struct D3DAdapter9DRM *d3d9_drm = NULL;
-static struct d3dadapter_info d3d_info;
 
 static XContext d3d_hwnd_context;
 static CRITICAL_SECTION context_section;
@@ -86,6 +82,7 @@ struct DRI2Present
 
     D3DPRESENT_PARAMETERS params;
     HWND focus_wnd;
+    PRESENTpriv *present_priv;
 
     struct {
         Drawable drawable;
@@ -259,24 +256,83 @@ DRI2Present_GetPresentParameters( struct DRI2Present *This,
     return D3D_OK;
 }
 
+struct D3DWindowBuffer {
+    Pixmap pixmap;
+    PRESENTPixmapPriv *present_pixmap_priv;
+}
+
 static HRESULT WINAPI
-DRI2Present_GetBuffer( struct DRI2Present *This,
-                              HWND hWndOverride,
-                              void *pBuffer,
-                              const RECT *pDestRect,
-                              RECT *pRect,
-                              RGNDATA **ppRegion )
+DRI2Present_NewBuffer( struct DRI2Present *This,
+                       int dmaBufFd,
+                       int width,
+                       int height,
+                       int stride,
+                       int depth,
+                       int bpp,
+                       D3DWindowBuffer **out)
 {
-    static const unsigned attachments[] = { DRI2BufferBackLeft };
+    Pixmap pixmap;
 
+    if (!DRI3PixmapFromDmaBuf(gdi_display, DefaultScreen(gdi_display),
+                              dmaBufFd, width, height, stride, depth,
+                              bpp, &pixmap )
+        return D3DERR_DRIVERINTERNALERROR;
+
+    *out = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                    sizeof(struct D3DWindowBuffer));
+    (*out)->pixmap = pixmap;
+    PRESENTPixmapInit(This->present_priv, pixmap, &((*out)->present_pixmap_priv));
+    return D3D_OK;
+}
+
+static HRESULT WINAPI
+DRI2Present_DestroyBuffer( struct DRI2Present *This,
+                           D3DWindowBuffer *buffer )
+{
+    /* the pixmap is managed by the PRESENT backend.
+     * But if it can delete it right away, we may have
+     * better performance */
+    PRESENTTryFreePixmap(buffer->present_pixmap_priv);
+    HeapFree(GetProcessHeap(), 0, buffer);
+}
+
+static HRESULT WINAPI
+DRI2Present_IsBufferReleased( struct DRI2Present *This,
+                              D3DWindowBuffer *buffer,
+                              BOOL *bReleased )
+{
+    *bReleased = PRESENTIsPixmapReleased(buffer->present_pixmap_priv);
+    return D3D_OK;
+}
+
+static HRESULT WINAPI
+DRI2Present_WaitOneBufferReleased)( struct DRI2Present *This )
+{
+    if (PRESENTWaitOnePixmapReleased(This->present_priv))
+        return D3D_OK;
+    else
+        return D3DERR_DRIVERINTERNALERROR;
+}
+
+static HRESULT WINAPI
+DRI2Present_FrontBufferCopy( struct DRI2Present *This,
+                             D3DWindowBuffer *buffer )
+{
+    if (PRESENTHelperCopyFront(gdi_display, buffer->present_pixmap_priv))
+        return D3D_OK;
+    else
+        return D3DERR_DRIVERINTERNALERROR;
+}
+
+static HRESULT WINAPI
+DRI2Present_PresentBuffer( struct DRI2Present *This,
+                           D3DWindowBuffer *buffer,
+                           HWND hWndOverride,
+                           const RECT *pSourceRect,
+                           const RECT *pDestRect,
+                           RGNDATA *pDirtyRegion )
+{
     struct d3d_drawable *d3d;
-    D3DDRM_BUFFER *drmbuf = pBuffer;
-    DRI2Buffer *buffers;
-    RECT dest;
-    unsigned width, height, n;
-
-    TRACE("(This=%p, hWndOverride=%p, pBuffer=%p, pRect=%p, ppRegion=%p)\n",
-          This, hWndOverride, pBuffer, pRect, ppRegion);
 
     if (hWndOverride) {
         d3d = get_d3d_drawable(hWndOverride);
@@ -287,119 +343,11 @@ DRI2Present_GetBuffer( struct DRI2Present *This,
     }
     if (!d3d) { return D3DERR_DRIVERINTERNALERROR; }
 
-    {
-        /* TODO: don't pass rgndata to the driver, but use it for DRI2CopyRegion
-        DWORD rgn_size;
-        HRGN hrgn = CreateRectRgn(0, 0, 0, 0);
-        if (GetWindowRgn(This->current_window.real, hrgn) != _ERROR) {
-            rgn_size = GetRegionData(hrgn, 0, NULL);
-            This->rgndata = HeapAlloc(GetProcessHeap(), 0, rgn_size);
-            GetRegionData(hrgn, rgn_size, This->rgndata);
-        }
-        DeleteObject(hrgn);
-        if (!This->rgndata) {
-            return D3DERR_DRIVERINTERNALERROR;
-        }*/
-        *ppRegion = NULL;
-    }
-
-    /* XXX base this on events instead of calling every single frame */
-    if ((n = DRI2GetBuffers(gdi_display, d3d->drawable, attachments, 1,
-                            &width, &height, &buffers)) < 1) {
-        ERR("DRI2GetBuffers failed (drawable=%u, n=%u)\n",
-            (unsigned)d3d->drawable, n);
-        release_d3d_drawable(d3d);
+    if (!PRESENTPixmap(gdi_display, d3d->drawable, buffer->present_pixmap_priv,
+                       This->params, pSourceRect, pDestRect, pDirtyRegion))
         return D3DERR_DRIVERINTERNALERROR;
-    }
-
-    drmbuf->iName = buffers[0].name;
-    drmbuf->dwWidth = width;
-    drmbuf->dwHeight = height;
-    drmbuf->dwStride = buffers[0].pitch;
-    drmbuf->dwCPP = buffers[0].cpp;
-    HeapFree(GetProcessHeap(), 0, buffers);
-
-    /* return the offset region to the driver */
-    pRect->left = d3d->dc_rect.left;
-    pRect->top = d3d->dc_rect.top;
-    pRect->right = d3d->dc_rect.right;
-    pRect->bottom = d3d->dc_rect.bottom;
-
-    TRACE("pRect=(%u..%u)x(%u..%u)\n",
-          pRect->left, pRect->right, pRect->top, pRect->bottom);
-
-    /* if pDestRect is set, calculate the final region */
-    dest = *pRect;
-    if (pDestRect) {
-        dest.left += pDestRect->left;
-        dest.top += pDestRect->top;
-        dest.right = pDestRect->right + dest.left;
-        dest.bottom = pDestRect->bottom + dest.top;
-        if (dest.left > pRect->right) { dest.left = pRect->right; }
-        if (dest.top > pRect->bottom) { dest.top = pRect->bottom; }
-        if (dest.right > pRect->right) { dest.right = pRect->right; }
-        if (dest.bottom > pRect->bottom) { dest.bottom = pRect->bottom; }
-
-        TRACE("dest=(%u..%u)x(%u..%u)\n",
-              dest.left, dest.right, dest.top, dest.bottom);
-    }
-
-    /* if the new dest region doesn't match the cached one, destroy it */
-    if (!EqualRect(&d3d->dest_rect, &dest) && d3d->region) {
-        pXFixesDestroyRegion(gdi_display, d3d->region);
-        d3d->region = 0;
-    }
-
-    /* create region to match the new destination */
-    if (!d3d->region) {
-        XRectangle xrect;
-
-        xrect.x = dest.left;
-        xrect.y = dest.top;
-        xrect.width = dest.right - dest.left;
-        xrect.height = dest.bottom - dest.top;
-
-        d3d->region = pXFixesCreateRegion(gdi_display, &xrect, 1);
-        d3d->dest_rect = dest;
-
-        TRACE("XFixes rect (x=%u, y=%u, w=%u, h=%u)\n",
-              xrect.x, xrect.y, xrect.width, xrect.height);
-    }
-
-    This->cache.drawable = d3d->drawable;
-    This->cache.region = d3d->region;
 
     release_d3d_drawable(d3d);
-
-    return D3D_OK;
-}
-
-static HRESULT WINAPI
-DRI2Present_GetFrontBuffer( struct DRI2Present *This,
-                            void *pBuffer )
-{
-    FIXME("(%p, %p), stub!\n", This, pBuffer);
-    return D3DERR_INVALIDCALL;
-}
-
-static HRESULT WINAPI
-DRI2Present_Present( struct DRI2Present *This,
-                     DWORD Flags )
-{
-    TRACE("(This=%p, Flags=%x)\n", This, Flags);
-
-    XFlush(gdi_display);
-
-    if (1/*This->dri2_minor < 3*/) {
-        if (!DRI2CopyRegion(gdi_display, This->cache.drawable,
-                            This->cache.region, DRI2BufferFrontLeft,
-                            DRI2BufferBackLeft)) {
-            ERR("DRI2CopyRegion failed (drawable=%u, region=%u)\n",
-                (unsigned)This->cache.drawable, (unsigned)This->cache.region);
-            return D3DERR_DRIVERINTERNALERROR;
-        }
-        /* XXX if (!(Flags & D3DPRESENT_DONOTWAIT)) { */
-    }
 
     return D3D_OK;
 }
@@ -533,13 +481,21 @@ DRI2Present_SetGammaRamp( struct DRI2Present *This,
 }
 
 static HRESULT WINAPI
-DRI2Present_GetWindowRect( struct DRI2Present *This,
+DRI2Present_GetWindowSize( struct DRI2Present *This,
                            HWND hWnd,
-                           LPRECT pRect )
+                           int *width, int *height )
 {
+    HRESULT hr;
+    Rect pRect;
+
     if (!hWnd)
         hWnd = This->focus_wnd;
-    return GetClientRect(hWnd, pRect) ? D3D_OK : D3DERR_INVALIDCALL;
+    hr = GetClientRect(hWnd, &pRect);
+    if (!hr)
+        return D3DERR_INVALIDCALL;
+    *width = pRect.right - pRect.left;
+    *height = pRect.bottom - pRect.top;
+    return D3D_OK;
 }
 
 static LONG fullscreen_style(LONG style)
@@ -578,7 +534,7 @@ static ID3DPresentVtbl DRI2Present_vtable = {
     (void *)DRI2Present_SetCursorPos,
     (void *)DRI2Present_SetCursor,
     (void *)DRI2Present_SetGammaRamp,
-    (void *)DRI2Present_GetWindowRect
+    (void *)DRI2Present_GetWindowSize
 };
 
 static HRESULT
@@ -664,6 +620,8 @@ DRI2Present_new( Display *dpy,
 
     This->params = *params;
     strcpyW(This->devname, devname);
+
+    PRESENTInit(&(This->present_priv));
 
     *out = This;
 
@@ -826,8 +784,6 @@ dri2_create_adapter9( HDC hdc,
                       ID3DAdapter9 **out )
 {
     struct x11drv_escape_get_drawable extesc = { X11DRV_GET_DRAWABLE };
-    drm_auth_t auth;
-    Window root;
     HRESULT hr;
     int fd;
 
@@ -841,53 +797,8 @@ dri2_create_adapter9( HDC hdc,
         WARN("X11 drawable lookup failed (hdc=%p)\n", hdc);
     }
 
-    { /* XGetGeometry */
-        unsigned udummy;
-        int dummy;
-
-        if (!XGetGeometry(gdi_display, extesc.drawable, &root, &dummy, &dummy,
-                          &udummy, &udummy, &udummy, &udummy)) {
-            WARN("XGetGeometry: Unable to get root window (drawable=%u)\n",
-                 (unsigned)extesc.drawable);
-            root = (Window)extesc.drawable; /* cross your fingers */
-        }
-    }
-
-    { /* DRI2Connect */
-        char *driver, *device;
-
-        if (!DRI2Connect(gdi_display, root, DRI2DriverDRI, &driver, &device)) {
-            WARN("DRI2Connect: Unable to connect DRI2 (window=%u)\n",
-                 (unsigned)root);
-            return D3DERR_DRIVERINTERNALERROR;
-        }
-
-        fd = open(device, O_RDWR);
-        if (fd < 0) {
-            WARN("Failed to open drm fd: %s (%s)\n", strerror(errno), device);
-            HeapFree(GetProcessHeap(), 0, driver);
-            HeapFree(GetProcessHeap(), 0, device);
-            return D3DERR_DRIVERINTERNALERROR;
-        }
-
-        /* authenticate */
-        if (ioctl(fd, DRM_IOCTL_GET_MAGIC, &auth) != 0) {
-            WARN("DRM_IOCTL_GET_MAGIC failed: %s (%s)\n",
-                 strerror(errno), device);
-            HeapFree(GetProcessHeap(), 0, driver);
-            HeapFree(GetProcessHeap(), 0, device);
-            return D3DERR_DRIVERINTERNALERROR;
-        }
-
-        TRACE("Associated `%s' with fd %d opened from `%s'\n",
-              driver, fd, device);
-
-        HeapFree(GetProcessHeap(), 0, driver);
-        HeapFree(GetProcessHeap(), 0, device);
-    }
-
-    if (!DRI2Authenticate(gdi_display, root, auth.magic)) {
-        WARN("DRI2Authenticate failed (fd=%d)\n", fd);
+    if (!DRI3Open(gdi_display, DefaultScreen(gdi_display), &fd)) {
+        WARN("DRI3Open failed (fd=%d)\n", fd);
         return D3DERR_DRIVERINTERNALERROR;
     }
 
@@ -957,19 +868,11 @@ has_d3dadapter( void )
     /* this will be used to store d3d_drawables */
     d3d_hwnd_context = XUniqueContext();
 
-    /* query DRI2 */
-    d3d_info.dri2_major = DRI2_MAJOR;
-    d3d_info.dri2_minor = DRI2_MINOR;
-    if (!DRI2QueryExtension(gdi_display)) {
-        ERR("Xserver doesn't support DRI2.\n");
-        return D3DERR_DRIVERINTERNALERROR;
+    if (!DRI3CheckExtension(gdi_display, 1, 0) ||
+        !PRESENTCheckExtension(gdi_display, 1, 0)) {
+        ERR("Unable to query DRI3 or PRESENT\n");
+        goto cleanup;
     }
-    if (!DRI2QueryVersion(gdi_display, &d3d_info.dri2_major,
-                          &d3d_info.dri2_minor)) {
-        ERR("Unable to query DRI2 extension.\n");
-        return D3DERR_DRIVERINTERNALERROR;
-    }
-    TRACE("Got DRI2 version %u.%u\n", d3d_info.dri2_major, d3d_info.dri2_minor);
 
     /* query XFixes */
     if (!pXFixesQueryVersion(gdi_display, &xfmaj, &xfmin)) {

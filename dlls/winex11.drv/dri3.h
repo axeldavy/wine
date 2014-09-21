@@ -67,6 +67,12 @@ BOOL
 PRESENTPixmapInit(PRESENTpriv *present_priv, Pixmap pixmap, PRESENTPixmapPriv **present_pixmap_priv);
 
 BOOL
+PRESENTTryFreePixmap(PRESENTPixmapPriv *present_pixmap_priv);
+
+BOOL
+PRESENTHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv);
+
+BOOL
 PRESENTPixmap(Display *dpy, XID window,
               PRESENTPixmapPriv *present_pixmap_priv, D3DPRESENT_PARAMETERS *pPresentationParameters,
               RECT *pSourceRect, RECT *pDestRect, RGNDATA *pDirtyRegion);

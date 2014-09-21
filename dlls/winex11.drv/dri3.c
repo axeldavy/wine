@@ -370,6 +370,7 @@ PRESENTDestroy(PRESENTpriv *present_priv)
     current = first_present_priv;
     while (current) {
         PRESENTPixmapPriv *next = current->next;
+        XFreePixmap(current->pixmap);
         free(current);
         current = next;
     }
@@ -392,6 +393,61 @@ PRESENTPixmapInit(PRESENTpriv *present_priv, Pixmap pixmap, PRESENTPixmapPriv **
     (*present_pixmap_priv)->next = present_priv->first_present_priv;
     present_priv->first_present_priv = *present_pixmap_priv;
     return TRUE;
+}
+
+BOOL
+PRESENTTryFreePixmap(PRESENTPixmapPriv *present_pixmap_priv)
+{
+    PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
+    PRESENTpriv *current;
+
+    if (!present_pixmap_priv->released)
+        return FALSE;
+
+    if (present_priv->first_present_priv == present_pixmap_priv) {
+        present_priv->first_present_priv = present_pixmap_priv->next;
+        goto free_priv;
+    }
+
+    current = present_priv->first_present_priv;
+    while (current->next != present_pixmap_priv)
+        current = current->next;
+    current->next = present_pixmap_priv->next;
+free_priv:
+    free(present_pixmap_priv);
+    return TRUE;
+}
+
+BOOL
+PRESENTHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv)
+{
+    xcb_void_cookie_t cookie;
+    xcb_generic_error_t *error;
+    Window *root_return;
+    int *x_return, *y_return;
+    unsigned int *width_return, *height_return;
+    unsigned int *border_width_return;
+    unsigned int *depth_return;
+    uint32_t v;
+    xcb_gcontext_t gc;
+    if (!present_priv->window)
+        return FALSE;
+    XGetGeometry(dpy, present_pixmap_priv->pixmap, root_return, x_return, y_return, width_return,
+                 height_return, border_width_return, depth_return);
+    v = 0;
+    xcb_create_gc(present_priv->xcb_connection,
+                  (gc = xcb_generate_id(c)),
+                  present_priv->window,
+                  XCB_GC_GRAPHICS_EXPOSURES,
+                  &v);
+    cookie = xcb_copy_area_checked(present_priv->xcb_connection,
+                                   present_priv->window,
+                                   present_pixmap_priv->pixmap,
+                                   gc,
+                                   0, 0, 0, 0,
+                                   *width_return, *height_return);
+    error = xcb_request_check(present_priv->xcb_connection, cookie);
+    return (error != NULL);
 }
 
 BOOL
