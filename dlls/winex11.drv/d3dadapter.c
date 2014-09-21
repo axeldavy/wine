@@ -313,7 +313,8 @@ DRI3Present_PresentBuffer( struct DRI3Present *This,
                            HWND hWndOverride,
                            const RECT *pSourceRect,
                            const RECT *pDestRect,
-                           RGNDATA *pDirtyRegion )
+                           RGNDATA *pDirtyRegion,
+                           DWORD Flags )
 {
     struct d3d_drawable *d3d;
 
@@ -325,6 +326,10 @@ DRI3Present_PresentBuffer( struct DRI3Present *This,
         d3d = get_d3d_drawable(This->focus_wnd);
     }
     if (!d3d) { return D3DERR_DRIVERINTERNALERROR; }
+
+    if ((Flags & D3DPRESENT_DONOTWAIT) &&
+        PRESENTWouldPresentBlock(buffer->present_pixmap_priv, &This->params))
+        return D3DERR_WASSTILLDRAWING;
 
     if (!PRESENTPixmap(gdi_display, d3d->drawable, buffer->present_pixmap_priv,
                        &This->params, pSourceRect, pDestRect, pDirtyRegion))
@@ -509,7 +514,6 @@ static ID3DPresentVtbl DRI3Present_vtable = {
     (void *)DRI3Present_IsBufferReleased,
     (void *)DRI3Present_WaitOneBufferReleased,
     (void *)DRI3Present_FrontBufferCopy,
-    (void *)DRI3Present_WouldPresentBlock,
     (void *)DRI3Present_PresentBuffer,
     (void *)DRI3Present_AddRef,
     (void *)DRI3Present_Release,
