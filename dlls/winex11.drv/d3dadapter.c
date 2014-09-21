@@ -302,7 +302,7 @@ DRI3Present_FrontBufferCopy( struct DRI3Present *This,
 
 static HRESULT WINAPI
 DRI3Present_WouldPresentBlock( struct DRI3Present *This,
-                               D3DWindowBuffer *buffer)
+                               struct D3DWindowBuffer *buffer)
 {
     return (PRESENTWouldPresentBlock(buffer->present_pixmap_priv, &This->params) ? D3DERR_WASSTILLDRAWING : D3D_OK);
 }
