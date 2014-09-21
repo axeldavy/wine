@@ -481,6 +481,9 @@ PRESENTPixmap(Display *dpy, XID window,
         return FALSE;
     }
 
+    while (present_priv->pixmap_present_pending >= pPresentationParameters->BackBufferCount)
+        PRESENTwait_events(present_priv);
+
     target_msc = present_priv->last_msc;
     switch(pPresentationParameters->PresentationInterval) {
         case D3DPRESENT_INTERVAL_DEFAULT:
@@ -612,6 +615,16 @@ PRESENTWaitOnePixmapReleased(PRESENTpriv *present_priv)
         }
     } while (PRESENTwait_events(present_priv));
     /* TODO: here quits wine ?*/
+    return FALSE;
+}
+
+BOOL
+PRESENTWouldPresentBlock(PRESENTPixmapPriv *present_pixmap_priv,
+                         D3DPRESENT_PARAMETERS *pPresentationParameters)
+{
+    PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
+    if (present_priv->pixmap_present_pending >= pPresentationParameters->BackBufferCount)
+        return TRUE;
     return FALSE;
 }
 

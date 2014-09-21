@@ -301,6 +301,13 @@ DRI3Present_FrontBufferCopy( struct DRI3Present *This,
 }
 
 static HRESULT WINAPI
+DRI3Present_WouldPresentBlock( struct DRI3Present *This,
+                               D3DWindowBuffer *buffer)
+{
+    return (PRESENTWouldPresentBlock(buffer->present_pixmap_priv, &This->params) ? D3DERR_WASSTILLDRAWING : D3D_OK);
+}
+
+static HRESULT WINAPI
 DRI3Present_PresentBuffer( struct DRI3Present *This,
                            struct D3DWindowBuffer *buffer,
                            HWND hWndOverride,
@@ -502,6 +509,7 @@ static ID3DPresentVtbl DRI3Present_vtable = {
     (void *)DRI3Present_IsBufferReleased,
     (void *)DRI3Present_WaitOneBufferReleased,
     (void *)DRI3Present_FrontBufferCopy,
+    (void *)DRI3Present_WouldPresentBlock,
     (void *)DRI3Present_PresentBuffer,
     (void *)DRI3Present_AddRef,
     (void *)DRI3Present_Release,

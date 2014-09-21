@@ -83,6 +83,10 @@ PRESENTIsPixmapReleased(PRESENTPixmapPriv *present_pixmap_priv);
 BOOL
 PRESENTWaitOnePixmapReleased(PRESENTpriv *present_priv);
 
+BOOL
+PRESENTWouldPresentBlock(PRESENTPixmapPriv *present_pixmap_priv,
+                         D3DPRESENT_PARAMETERS *pPresentationParameters);
+
 #endif /* defined(SONAME_LIBXEXT) && defined(SONAME_LIBXFIXES) */
 
 #endif /* __WINE_DRI3_H */
