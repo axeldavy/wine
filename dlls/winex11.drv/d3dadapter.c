@@ -306,7 +306,7 @@ DRI3Present_PresentBuffer( struct DRI3Present *This,
                            HWND hWndOverride,
                            const RECT *pSourceRect,
                            const RECT *pDestRect,
-                           RGNDATA *pDirtyRegion,
+                           const RGNDATA *pDirtyRegion,
                            DWORD Flags )
 {
     struct d3d_drawable *d3d;
