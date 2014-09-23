@@ -142,8 +142,8 @@ DRI3PixmapFromDmaBuf(Display *dpy, int screen, int fd, int width, int height, in
     cookie = xcb_dri3_pixmap_from_buffer_checked(xcb_connection,
                                                 (*pixmap = xcb_generate_id(xcb_connection)),
                                                 root,
-                                                width * stride * bpp, // size calculation may be wrong (perhaps /8 missing), but seems unused by the server.
-                                                width, height, stride * bpp / 8, // note: pitch calculation may be wrong
+                                                0,
+                                                width, height, stride,
                                                 depth, bpp, fd);
     error = xcb_request_check(xcb_connection, cookie); /* performs a flush */
     if (error) {
@@ -296,7 +296,7 @@ static void PRESENTForceReleases(PRESENTpriv *present_priv)
         PRESENTwait_events(present_priv); /* TODO quit wine if returns false */
     }
     PRESENTflush_events(present_priv); /* may be remaining idle event */
-    
+
     current = present_priv;
     while (current) {
         if (!current->released) {
@@ -462,7 +462,7 @@ PRESENTHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv)
 BOOL
 PRESENTPixmap(Display *dpy, XID window,
               PRESENTPixmapPriv *present_pixmap_priv, D3DPRESENT_PARAMETERS *pPresentationParameters,
-              const RECT *pSourceRect, const RECT *pDestRect, RGNDATA *pDirtyRegion)
+              const RECT *pSourceRect, const RECT *pDestRect, const RGNDATA *pDirtyRegion)
 {
     PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
     xcb_void_cookie_t cookie;

@@ -46,6 +46,9 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3dadapter);
 #include <errno.h>
 #include <fcntl.h>
 
+#ifndef D3DPRESENT_DONOTWAIT
+#define D3DPRESENT_DONOTWAIT      0x00000001
+#endif
 
 static const struct D3DAdapter9DRM *d3d9_drm = NULL;
 
@@ -502,15 +505,15 @@ static LONG fullscreen_exstyle(LONG exstyle)
 
 static ID3DPresentVtbl DRI3Present_vtable = {
     (void *)DRI3Present_QueryInterface,
+    (void *)DRI3Present_AddRef,
+    (void *)DRI3Present_Release,
+    (void *)DRI3Present_GetPresentParameters,
     (void *)DRI3Present_NewBuffer,
     (void *)DRI3Present_DestroyBuffer,
     (void *)DRI3Present_IsBufferReleased,
     (void *)DRI3Present_WaitOneBufferReleased,
     (void *)DRI3Present_FrontBufferCopy,
     (void *)DRI3Present_PresentBuffer,
-    (void *)DRI3Present_AddRef,
-    (void *)DRI3Present_Release,
-    (void *)DRI3Present_GetPresentParameters,
     (void *)DRI3Present_GetRasterStatus,
     (void *)DRI3Present_GetDisplayMode,
     (void *)DRI3Present_GetPresentStats,
